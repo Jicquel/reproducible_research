@@ -1,0 +1,78 @@
+---
+title: "R Notebook"
+output:
+  html_document: default
+  html_notebook: default
+---
+
+
+```{r, include=FALSE}
+if(!require("anytime")) install.packages("anytime");library("anytime");
+if(!require("plotly"))install.packages("plotly");library("plotly");
+```
+
+
+```{r}
+data <- read.csv(file="./data/liglab2.csv", header=TRUE, sep=" ");
+```
+
+## Data verification
+```{r}
+head(data)
+tail(data)
+```
+
+
+We can convert the date timestamp to a more readable format
+```{r}
+data$date = anytime(data$date);
+
+# Check if date has been successfully converted in POSIX dates
+class(data$date);
+```
+
+Are there any missing data?
+```{r}
+na_records = apply(data, 1, function (x) any(is.na(x)))
+data[na_records,]
+```
+
+Correlation between data
+```{r}
+cor(subset(data, select=c("size", "time")));
+```
+There is no evident correlation between time of response and packet size. Let's plot the data
+
+```{r}
+p <- plot_ly(data, x = ~date, mode='lines')%>%
+add_trace(y = ~time, name = "date", type="scatter", mode = 'lines');
+p
+```
+
+
+```{r}
+ggplot(data = data, mapping = aes(x =size, y = time))+
+  geom_point(size=1)
+```
+Thanks to this plot, two classes can be easily seen. The packets which have a size below 1500 bytes, and the others.
+
+```{r}
+low_size_class <- subset(data, data$size < 1500);
+
+ggplot(data = low_size_class, mapping = aes(x =size, y = time))+
+geom_point() + geom_smooth(method="lm", size=1.5)
+
+high_size_class <- subset(data, data$size >= 1500);
+ggplot(data = low_size_class, mapping = aes(x =size, y = time))+
+
+p
+```
+
+Linear regressions
+```{r}
+low_size_class <- subset(data, data$size < 1500);
+linear_reg <- lm(size ~ time, # regression formula
+                data=low_size_class) # data set
+summary(linear_reg);
+```
+
