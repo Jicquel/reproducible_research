@@ -1,34 +1,48 @@
 ---
 title: "R Notebook"
 output:
-  html_document: default
   html_notebook: default
+  html_document: default
 ---
 
 
 ```{r, include=FALSE}
 if(!require("anytime")) install.packages("anytime");library("anytime");
 if(!require("plotly"))install.packages("plotly");library("plotly");
+if(!require("gridExtra"))install.packages("gridExtra");library("gridExtra");
+if(!require("quantreg"))install.packages("quantreg");library("quantreg");
 ```
 
+TODO : what are we looking for?
+TODO : present how the data is initally formatted, and what it represents
 
+## First dataset
+
+The first dataset is called liglab2.csv, and has been converted from the liblab2.log file with the bash script **TODO**.
+
+### Data verification
 ```{r}
 data <- read.csv(file="./data/liglab2.csv", header=TRUE, sep=" ");
 ```
 
-## Data verification
 ```{r}
 head(data)
 tail(data)
 ```
 
 
-We can convert the date timestamp to a more readable format
+We can convert the date timestamp to a more readable format, and check if the data is in a correct format.
 ```{r}
 data$date = anytime(data$date);
 
 # Check if date has been successfully converted in POSIX dates
 class(data$date);
+
+#Size should be integer
+class(data$size);
+
+#time should be numeric
+class(data$time);
 ```
 
 Are there any missing data?
@@ -37,42 +51,83 @@ na_records = apply(data, 1, function (x) any(is.na(x)))
 data[na_records,]
 ```
 
-Correlation between data
-```{r}
-cor(subset(data, select=c("size", "time")));
-```
-There is no evident correlation between time of response and packet size. Let's plot the data
+### Analysis
 
+Plot the time variation versus date could reveal patterns. Plotly allows to zoom dynamically in the data, and also to search more efficiently.
 ```{r}
 p <- plot_ly(data, x = ~date, mode='lines')%>%
 add_trace(y = ~time, name = "date", type="scatter", mode = 'lines');
 p
 ```
+But in this case, there is apparently no easily predictible pattern.
 
+There may be also correlation between the size of a packet and its size. But a value in [-0.2, 0.2] doesn't prove any link between two parameters.
+```{r}
+cor(subset(data, select=c("size", "time")));
+```
+There is no evident correlation between time of response and packet size. Let's plot the data to have a more general point of view.
 
 ```{r}
 ggplot(data = data, mapping = aes(x =size, y = time))+
   geom_point(size=1)
 ```
-Thanks to this plot, two classes can be easily seen. The packets which have a size below 1500 bytes, and the others.
+Thanks to this plot, two classes can be easily seen. The packets which have a size below about 1450-1500 bytes, and the others. To be more precise, there is a zoom in the specified zone.
 
 ```{r}
-low_size_class <- subset(data, data$size < 1500);
+ggplot(data = data, mapping = aes(x =size, y = time))+
+geom_point(size=1)+
+coord_cartesian(xlim=c(1450,1500))
+```
+According to this set of data, the size delimiter between the two classes would be 1480.
 
-ggplot(data = low_size_class, mapping = aes(x =size, y = time))+
-geom_point() + geom_smooth(method="lm", size=1.5)
+Nevertheless, this way of showing the data can be a bit confusing, because overlapping points and a single point have the same appearance. Sometimes, the geom_count option could solve this problem, but it is not really our case :
 
-high_size_class <- subset(data, data$size >= 1500);
-ggplot(data = low_size_class, mapping = aes(x =size, y = time))+
+```{r}
+ggplot(data = data, mapping = aes(x =size, y = time))+
+geom_count()
+```
 
+Histogram are more suited to this dataset.
+
+```{r}
+p_low <- ggplot(data = subset(data, size < 1480), mapping = aes(x =time)) +
+              geom_histogram(binwidth=10) + ggtitle("Time frequency of packet \nwhose size < 1480")
+p_high <- ggplot(data = subset(data, size >= 1480), mapping = aes(x =time)) +
+              geom_histogram(binwidth=10)+ggtitle("Time frequency of packet \nwhose size >= 1480")
+grid.arrange(p_low, p_high, nrow = 1)
+```
+Most of the times are about 0~10 ms. 
+
+Let's use linear regression to determine the latency (L), and the capacity (C), with the formula $T(S) = L + \frac{1}{C} * S$. The linear regression allows to predict y when only x is known, with the following equation $y = \beta_{1} + \beta_{2}x$, where $\beta_{1}$ is the intercept, and $\beta_{2}$ is the slope. In the current case, $\beta_{1}$ would be $L$, and $\beta_{2}$ would be $\frac{1}{C}$
+
+```{r}
+p <- ggplot(data = data, mapping = aes(x =size, y = time))+
+geom_point() + geom_smooth(data=subset(data, size >= 1480), method="lm", size=1.5, aes(colour="Second class linear reg"))+
+geom_smooth(data=subset(data, size < 1480), method="lm", size=1.5, aes(colour="First class linear reg"))
 p
 ```
 
-Linear regressions
+This simple linear regression seems a bit inappropriate, because a small number of long reponses have a huge impact on it. It can be seen with the R squared value, which is pretty low.
+
 ```{r}
-low_size_class <- subset(data, data$size < 1500);
-linear_reg <- lm(size ~ time, # regression formula
-                data=low_size_class) # data set
+linear_reg <- lm(time ~ size, # regression formula
+                data=subset(data, size < 1480)) # data set
 summary(linear_reg);
+
+
+linear_reg <- lm(time ~ size, # regression formula
+                data=subset(data, size >= 1480)) # data set
+summary(linear_reg);
+```
+
+```{r}
+p <- ggplot(data = data, mapping = aes(x =size, y = time))+
+geom_point() + geom_quantile(quantiles = 0.85, data=subset(data, size >= 1480), colour = "red", size = 2) +
+geom_quantile(quantiles = 0.85, data=subset(data, size < 1480), colour = "blue", size = 2)
+p
+```
+```{r}
+rqfit <- rq(time ~ size, data = data, tau=0.85)
+summary(rqfit)
 ```
 
