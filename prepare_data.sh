@@ -1,7 +1,13 @@
 #!/bin/bash
 
-#writing CSV headers
-echo "date size time" > data/liglab2.csv
+for file in data/*.log;do
+	file_no_ext=data/$(basename "$file" ".log")
 
-#Formatting data and removing incoherent data
-sed -e 's/\ bytes.*time=\(.*\) ms/ \1/g' -e 's/\[\(.*\)]/\1/g' data/liglab2.log | grep "^[0-9]*.[0-9]* [0-9]* [0-9]*.[0-9]*$" >> data/liglab2.csv
+	#writing CSV headers
+	echo "date size time" > "$file_no_ext"".csv"
+
+	#Formatting data and removing incoherent data
+	sed -e 's/\ bytes.*time=\(.*\) ms/ \1/g' -e 's/\[\(.*\)]/\1/g' "$file_no_ext"".log" | grep "^[0-9]*.[0-9]* [0-9]* [0-9]*.[0-9]*$" >> "$file_no_ext"".csv"
+done;
+
+
