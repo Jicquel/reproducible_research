@@ -1,10 +1,32 @@
 ---
-title: "R Notebook"
+title: "Subject 4: Latency and capacity estimation for a network connection from asymmetric measurements"
 output:
   html_notebook: default
   html_document: default
 ---
 
+The goal of this analysis is to estimate the latency and the capacity of two connections. To do it, two datasets of ping logs are available. One from a short on-campus connection : 
+
+http://mescal.imag.fr/membres/arnaud.legrand/teaching/2014/RICM4_EP_ping/liglab2.log.gz
+
+and another from a connection to a remote web site that is popular, and therefore has a heavy load :
+
+http://mescal.imag.fr/membres/arnaud.legrand/teaching/2014/RICM4_EP_ping/stackoverflow.log.gz.
+
+The initial data is formatted like below : 
+
+```{r}
+readLines('data/liglab2.log', n=2);
+```
+
+*prepare_data.sh* formats the logs in csv and removes incorrect lines.
+
+*** 
+To format logs, execute *prepare_data.sh* script. Formatted files will be saved in the *data/* directory.
+
+**WARNING :** *liglab2.log* and *stackoverflow.log* must be placed in *data/* directory.
+
+***
 
 ```{r, include=FALSE}
 if(!require("anytime")) install.packages("anytime");library("anytime");
@@ -13,21 +35,24 @@ if(!require("gridExtra"))install.packages("gridExtra");library("gridExtra");
 if(!require("quantreg"))install.packages("quantreg");library("quantreg");
 ```
 
-TODO : what are we looking for?
-TODO : present how the data is initally formatted, and what it represents
-
 ## First dataset
 
-The first dataset is called liglab2.csv, and has been converted from the liblab2.log file with the bash script **TODO**.
+The first dataset is called liglab2.csv, and has been converted from the liblab2.log. 
 
 ### Data verification
+
+Reading the data
 ```{r}
 data <- read.csv(file="./data/liglab2.csv", header=TRUE, sep=" ");
 ```
-
+ 
+Checking that header and first data seems corrects.
 ```{r}
+# Header
+colnames(data)
+
+#First rows of the dataset
 head(data)
-tail(data)
 ```
 
 
@@ -41,7 +66,7 @@ class(data$date);
 #Size should be integer
 class(data$size);
 
-#time should be numeric
+#time should be at least numeric
 class(data$time);
 ```
 
@@ -53,13 +78,13 @@ data[na_records,]
 
 ### Analysis
 
-Plot the time variation versus date could reveal patterns. Plotly allows to zoom dynamically in the data, and also to search more efficiently.
+Plot the time variation versus date could reveal patterns. Plotly allows to zoom dynamically in the data, which is convenient to explore data.
 ```{r}
 p <- plot_ly(data, x = ~date, mode='lines')%>%
 add_trace(y = ~time, name = "date", type="scatter", mode = 'lines');
 p
 ```
-But in this case, there is apparently no easily predictible pattern.
+But in this case, there is not any easily predictible pattern.
 
 There may be also correlation between the size of a packet and its size. But a value in [-0.2, 0.2] doesn't prove any link between two parameters.
 ```{r}
@@ -69,65 +94,254 @@ There is no evident correlation between time of response and packet size. Let's 
 
 ```{r}
 ggplot(data = data, mapping = aes(x =size, y = time))+
-  geom_point(size=1)
+  geom_point(size=1)+ ggtitle("Ping time according to packet size")
 ```
+
 Thanks to this plot, two classes can be easily seen. The packets which have a size below about 1450-1500 bytes, and the others. To be more precise, there is a zoom in the specified zone.
 
 ```{r}
 ggplot(data = data, mapping = aes(x =size, y = time))+
 geom_point(size=1)+
-coord_cartesian(xlim=c(1450,1500))
+coord_cartesian(xlim=c(1450,1500))+ ggtitle("Ping time with a zoom on packet size of ~ 1480 bytes")
 ```
-According to this set of data, the size delimiter between the two classes would be 1480.
+According to this set of data, the size delimiter between the two classes would be 1481. The difference between the two classes time could be explained by fragmentation. When a packet reaches a limit size (MTU), it is fragmented in smaller ones. The receiver also has to wait every packets, merge them and respond to the ping, which costs time. 
 
 Nevertheless, this way of showing the data can be a bit confusing, because overlapping points and a single point have the same appearance. Sometimes, the geom_count option could solve this problem, but it is not really our case :
 
 ```{r}
 ggplot(data = data, mapping = aes(x =size, y = time))+
-geom_count()
+geom_count() + ggtitle("Ping time according to packet size")
 ```
-
-Histogram are more suited to this dataset.
+Points are too close from each other. A bit of transparency could be better. To make it more readable, let's plot both classes separately with a zoom on lower bound.
 
 ```{r}
-p_low <- ggplot(data = subset(data, size < 1480), mapping = aes(x =time)) +
-              geom_histogram(binwidth=10) + ggtitle("Time frequency of packet \nwhose size < 1480")
-p_high <- ggplot(data = subset(data, size >= 1480), mapping = aes(x =time)) +
-              geom_histogram(binwidth=10)+ggtitle("Time frequency of packet \nwhose size >= 1480")
+# Packets whose size is < 1481
+low_size = subset(data, size < 1481);
+
+# Packets whose size is >= 1481
+high_size = subset(data, size >= 1481);
+
+# Zooming in lower bounds.
+p_low <- ggplot(data = low_size, mapping = aes(x =size,y = time)) +
+              geom_point(alpha= 0.1)+ggtitle("Ping delays of packets \nwhose size < 1481") + ylim(0,100)
+p_high <- ggplot(data = high_size, mapping = aes(x =size, y = time)) +
+              geom_point(alpha= 0.1)+ ggtitle("Ping delays of packets \nwhose size >= 1481")
 grid.arrange(p_low, p_high, nrow = 1)
 ```
-Most of the times are about 0~10 ms. 
+It is way more effective. Thanks to this representation, we can see that a most of times are near zero. This is validated by basic stastistics with the *sumarry* command.
+```{r}
+summary(low_size$time);
 
-Let's use linear regression to determine the latency (L), and the capacity (C), with the formula $T(S) = L + \frac{1}{C} * S$. The linear regression allows to predict y when only x is known, with the following equation $y = \beta_{1} + \beta_{2}x$, where $\beta_{1}$ is the intercept, and $\beta_{2}$ is the slope. In the current case, $\beta_{1}$ would be $L$, and $\beta_{2}$ would be $\frac{1}{C}$
+summary(high_size$time);
+```
+Histogram are also useful to have an idea of the times repartition. Despite very high maximum, the 3rd quartile values show that most of times are extremely low (~2ms). Therefore, a thin binwidth is needed.
+
+```{r}
+p_low <- ggplot(data = low_size, mapping = aes(x =time)) +
+              geom_histogram(binwidth=2) + ggtitle("Time frequency of packet \nwhose size < 1481")
+p_high <- ggplot(data = high_size, mapping = aes(x =time)) +
+              geom_histogram(binwidth=2)+ggtitle("Time frequency of packet \nwhose size >= 1481")
+grid.arrange(p_low, p_high, nrow = 1)
+```
+Most of the times are about 0~2 ms. 
+
+Let's use linear regression to determine the latency (L), and the capacity (C), with the formula $T(S) = L + \frac{1}{C} * S$. The linear regression allows to predict y when only x is known, with the following equation $y = \beta_{1} + \beta_{2}x$, where $\beta_{1}$ is the intercept, and $\beta_{2}$ is the slope. 
+
+In the current case, $\beta_{1}$ would be $L$, and $\beta_{2}$ would be $\frac{1}{C}$
 
 ```{r}
 p <- ggplot(data = data, mapping = aes(x =size, y = time))+
-geom_point() + geom_smooth(data=subset(data, size >= 1480), method="lm", size=1.5, aes(colour="Second class linear reg"))+
-geom_smooth(data=subset(data, size < 1480), method="lm", size=1.5, aes(colour="First class linear reg"))
+geom_point(alpha=0.1) + geom_smooth(data=subset(data, size >= 1481), method="lm", size=1.5, aes(colour="Second class linear reg"))+ ylim(0,100) +
+geom_smooth(data=subset(data, size < 1481), method="lm", size=1.5, aes(colour="First class linear reg")) + ggtitle("Ping time according to packet size with linear regressions")
 p
 ```
 
-This simple linear regression seems a bit inappropriate, because a small number of long reponses have a huge impact on it. It can be seen with the R squared value, which is pretty low.
+For the first class of data, the low value of R squared does not means that the model is bad. In our case, it could significate that there is a high variability, which is visible in the previous plot. Standard error are low, but it seams that the intercept value is a bit too high to be realistic. The coefficient is approximately 3.2, which is greater than the 3rd quartile of the dataset. This is caused by the small number of long responses, which have a huge impact on the regression.
 
 ```{r}
+# Linear regression of packet size < 1481
 linear_reg <- lm(time ~ size, # regression formula
-                data=subset(data, size < 1480)) # data set
-summary(linear_reg);
-
-
-linear_reg <- lm(time ~ size, # regression formula
-                data=subset(data, size >= 1480)) # data set
+                data=low_size) # data set
 summary(linear_reg);
 ```
+
+For the second class, the linear regression is totally inappropriate, the slope, the standard error and R-squared are bad.
+```{r}
+
+# Linear regression of packet size >= 1481
+linear_reg <- lm(time ~ size, # regression formula
+                data=high_size) # data set
+summary(linear_reg);
+```
+A quantile regression should be more accurate. Testing different taus could help deciding which percentage of times to take  (https://data.library.virginia.edu/getting-started-with-quantile-regression/)
+Each black dot is the slope coefficient for the quantile indicated on the x axis. The red lines are the least squares estimate and its confidence interval. Uper quantile is well beyond the least squares. A tau of 0.8 could be suitable, and ensures the previous results.
+
+```{r}
+rqfit <- rq(time ~ size, data = low_size, tau=1:9/10)
+plot(summary(rqfit), parm="size", main="Size coefficient along with confidence intervals for each tau (Low class)")
+
+rqfit <- rq(time ~ size, data = high_size, tau=1:9/10)
+plot(summary(rqfit), parm="size", main="Size coefficient along with confidence intervals for each tau (High class)")
+```
+Visually, this quantile regression seems way better than the linear one.
 
 ```{r}
 p <- ggplot(data = data, mapping = aes(x =size, y = time))+
-geom_point() + geom_quantile(quantiles = 0.85, data=subset(data, size >= 1480), colour = "red", size = 2) +
-geom_quantile(quantiles = 0.85, data=subset(data, size < 1480), colour = "blue", size = 2)
+geom_point(alpha=0.2) +
+geom_quantile(quantiles = 0.8, data=low_size, colour = "blue", size = 2)+
+geom_quantile(quantiles = 0.8, data=high_size, colour = "red", size = 2) + ylim(0,100) + ggtitle("Ping time according to packet size with quantile regressions")
 p
 ```
+
+The extremely low p-value and standard error seems to confirm the graphical result. 
 ```{r}
-rqfit <- rq(time ~ size, data = data, tau=0.85)
-summary(rqfit)
+# Low class quantile regression
+summary(lm(time ~ size, data=low_size[low_size$time < quantile(low_size$time, 0.8),]));
+
+# High class quantile regression
+summary(lm(time ~ size, data=high_size[high_size$time < quantile(high_size$time, 0.8),]));
 ```
+
+
+According to the intercept and size estimation, for the first class : the latency $L$ is approximately equal to $1.145 * 10^-3$ seconds, and the capacity $C$ to $\frac{1}{0.0002235} \simeq 4474$ bytes/s. 
+
+For the second class, $L \simeq 1.9 * 10^-3$ seconds and $C \simeq \frac{1}{0.0002239} = \simeq 4466$ bytes/s. The capacity doesn't really change, which is pretty logical, and the latency quite increases with the fragmentation of the package.
+
+## Second dataset
+
+The second dataset is called stackoverflow.csv, and has been converted from the stackoverflow.log. It results from a connection to a remote web site connection with heavy loads.
+
+### Data verification
+
+The first steps are similar to the first dataset. Thus, they are not detailed.
+```{r}
+data <- read.csv(file="./data/stackoverflow.csv", header=TRUE, sep=" ");
+
+# Header
+colnames(data)
+
+# First rows 
+head(data)
+```
+```{r}
+data$date = anytime(data$date);
+
+# Check if date has been successfully converted in POSIX dates
+class(data$date);
+
+#Size should be integer
+class(data$size);
+
+#time should be at least numeric
+class(data$time);
+```
+```{r}
+na_records = apply(data, 1, function (x) any(is.na(x)))
+data[na_records,]
+```
+
+### Analysis
+
+Thanks to this plot, we can see that the gap between extreme values is less important. 
+Like the first set, a predictible pattern could be a bit tough to detect.
+
+```{r}
+p <- plot_ly(data, x = ~date, mode='lines')%>%
+add_trace(y = ~time, name = "date", type="scatter", mode = 'lines');
+p
+```
+The server being far away, the minimum time value for a ping is bigger.
+```{r}
+summary(data[["time"]]);
+```
+
+There is even less correlation between size and times.
+```{r}
+cor(subset(data, select=c("size", "time")));
+```
+
+Let's plot the data to have a more general point of view.
+
+```{r}
+ggplot(data = data, mapping = aes(x =size, y = time))+
+geom_point(alpha=0.1) + ggtitle("Ping times according to packet size")
+```
+Without any surprise, there is the same average delimitation between packets whose size is below or greater than 1482 bytes. The protocol used is the same, whatever the distance between clients and the web server.
+```{r}
+ggplot(data = data, mapping = aes(x =size, y = time))+
+geom_point(alpha=0.3)+
+coord_cartesian(xlim=c(1450,1500)) + ggtitle("Ping time with a zoom on packet size of ~ 1480 bytes")
+```
+
+Like the short connection, most times are gathered at lower bounds. Nevertheless, we can see with histograms that outliers are more equally distributed than in the first dataset. In addition to fragmentation, waiting time on the server could be increased by heavy load, creating requests queues. If the initial ICMP packet is divided into multiple ones (fragmentation), then packets could arrive at different time, and be far from each other in this queue, which could explain the time difference between small and big packets.
+
+```{r}
+# Packets whose size is < 1482
+low_size = subset(data, size < 1482);
+
+# Packets whose size is >= 1482
+high_size = subset(data, size >= 1482);
+
+p_low <- ggplot(data = low_size, mapping = aes(x =time)) +
+              geom_histogram(binwidth=2) + ggtitle("Time frequency of packet \nwhose size < 1482")
+p_high <- ggplot(data = high_size, mapping = aes(x =time)) +
+              geom_histogram(binwidth=2)+ggtitle("Time frequency of packet \nwhose size >= 1482")
+grid.arrange(p_low, p_high, nrow = 1)
+```
+
+The linear regression seems also inappropriate, including the small number of higher times. The explanations are the same as the first dataset ones.
+```{r}
+p <- ggplot(data = data, mapping = aes(x =size, y = time))+
+geom_point(alpha=0.3) + geom_smooth(data=subset(data, size >= 1480), method="lm", size=1.5, aes(colour="Second class linear reg"))+
+geom_smooth(data=subset(data, size < 1480), method="lm", size=1.5, aes(colour="First class linear reg"))+ ggtitle("Ping time according to packet size with linear regressions")
+p
+```
+
+```{r}
+# Linear regression of packet size < 1482
+linear_reg <- lm(time ~ size, # regression formula
+                data=low_size) # data set
+summary(linear_reg);
+```
+
+
+```{r}
+# Linear regression of packet size >= 1482
+linear_reg <- lm(time ~ size, # regression formula
+                data=high_size) # data set
+summary(linear_reg);
+```
+Both visually and numerically with p-value and r-squared, this linear regression seems inappropriate.
+
+A quantile regression should be more accurate. The range between the 3rd quartile and the minimum value of time is the same for packets whose size is below 1482, and only one for the others. Then, a 3rd quartile regression should be perfect to approximate latency and capacity.
+```{r}
+#
+summary(low_size[["time"]]);
+summary(high_size[["time"]]);
+
+p <- ggplot(data = data, mapping = aes(x =size, y = time))+
+geom_point(alpha=0.2) + geom_quantile(quantiles = 0.75, data=high_size, colour = "red", size = 2) +
+geom_quantile(quantiles = 0.75, data=low_size, colour = "blue", size = 2) + ggtitle("Ping time according to packet size with quantile regressions")
+p
+```
+
+Results seem pretty good. The size coefficients in both quantiles regression below don't allow to reject the null hypothesis. It is hard to compute the capacity C because of this uncertainty. The (Intercept) coefficient has an extremely low standard error, and is estimated at 110 ms.
+
+```{r}
+# Low class 3r quartile regression
+summary(lm(time ~ size, data=low_size[low_size$time < quantile(low_size$time, 0.75),]));
+
+# High class 3rd quartile regression
+summary(lm(time ~ size, data=high_size[high_size$time < quantile(high_size$time, 0.75),]));
+```
+
+The second dataset shows long distance latencies. In contrary to the first dataset, the latencies are the same for the two classes (~110 ms), because the time involved by the data travel is far superior to the packets fragmentation cost. Moreover, the fact that size doesn't influence at all ping time for the three first quartiles makes the analysis of the capacity not relevant.in this scenario.
+
+
+# Conclusion 
+
+The most important point of this analysis to remember, could be that displaying only summaries or simple linear regression isn't sufficient. The first dataset's linear regression had great coefficients statistics. It is only after **displaying the data** that a suitable analysis could be done.
+
+Latencies have been evaluated for each dataset. Nevertheless, the capacity could not be evaluated on long distance connection. 
+
 
