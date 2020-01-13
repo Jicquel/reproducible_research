@@ -128,7 +128,7 @@ p_high <- ggplot(data = high_size, mapping = aes(x =size, y = time)) +
               geom_point(alpha= 0.1)+ ggtitle("Ping delays of packets \nwhose size >= 1481")
 grid.arrange(p_low, p_high, nrow = 1)
 ```
-It is way more effective. Thanks to this representation, we can see that a most of times are near zero. This is validated by basic stastistics with the *sumarry* command.
+It is way more effective. Thanks to this representation, we can see that a most of times are near zero. This is validated by basic stastistics with the *summary* command.
 ```{r}
 summary(low_size$time);
 
@@ -173,7 +173,20 @@ linear_reg <- lm(time ~ size, # regression formula
                 data=high_size) # data set
 summary(linear_reg);
 ```
-A quantile regression should be more accurate. Testing different taus could help deciding which percentage of times to take  (https://data.library.virginia.edu/getting-started-with-quantile-regression/)
+Another way could be to select only the smallest time for each packet size. It shows extremely nice coefficients, R-squared and p-value, but represents only the best case for every packet sizes.
+
+```{r}
+# Selection of smallest times for each packet size
+smallest_times = data %>% group_by(size) %>% summarise(time = min(time))
+
+# Low packets size
+summary(lm(time ~ size, data=subset(smallest_times, size < 1481)))
+
+# High packets size
+summary(lm(time ~ size, data=subset(smallest_times, size >= 1481)))
+```
+
+Thus, a quantile regression should be more accurate. Testing different taus could help deciding which percentage of times to take  (https://data.library.virginia.edu/getting-started-with-quantile-regression/)
 Each black dot is the slope coefficient for the quantile indicated on the x axis. The red lines are the least squares estimate and its confidence interval. Uper quantile is well beyond the least squares. A tau of 0.8 could be suitable, and ensures the previous results.
 
 ```{r}
@@ -193,19 +206,19 @@ geom_quantile(quantiles = 0.8, data=high_size, colour = "red", size = 2) + ylim(
 p
 ```
 
-The extremely low p-value and standard error seems to confirm the graphical result. 
+The extremely low standard error seems to confirm the graphical result. 
 ```{r}
 # Low class quantile regression
-summary(lm(time ~ size, data=low_size[low_size$time < quantile(low_size$time, 0.8),]));
+summary(rq(time ~ size, data = low_size, tau=0.8));
 
 # High class quantile regression
-summary(lm(time ~ size, data=high_size[high_size$time < quantile(high_size$time, 0.8),]));
+summary(rq(time ~ size, data = high_size, 0.8));
 ```
 
 
-According to the intercept and size estimation, for the first class : the latency $L$ is approximately equal to $1.145 * 10^-3$ seconds, and the capacity $C$ to $\frac{1}{0.0002235} \simeq 4474$ bytes/s. 
+According to the intercept and size estimation, for the first class : the latency $L$ is approximately equal to $1.3 * 10^-3$ seconds, and the capacity $C$ to $\frac{1}{0.0003} \simeq 3333$ bytes/s. 
 
-For the second class, $L \simeq 1.9 * 10^-3$ seconds and $C \simeq \frac{1}{0.0002239} = \simeq 4466$ bytes/s. The capacity doesn't really change, which is pretty logical, and the latency quite increases with the fragmentation of the package.
+For the second class, $L \simeq 2 * 10^-3$ seconds and $C \simeq \frac{1}{0.0002} = \simeq 5000$ bytes/s. The capacity doesn't really change, which is pretty logical, and the latency quite increases with the fragmentation of the package.
 
 ## Second dataset
 
@@ -289,14 +302,15 @@ p_high <- ggplot(data = high_size, mapping = aes(x =time)) +
 grid.arrange(p_low, p_high, nrow = 1)
 ```
 
-The linear regression seems also inappropriate, including the small number of higher times. The explanations are the same as the first dataset ones.
+The linear regression seems also inappropriate, including the small number of higher times. The explanations are pretty similar to the first one.
+Both lines are clearly above their ideal location.
 ```{r}
 p <- ggplot(data = data, mapping = aes(x =size, y = time))+
 geom_point(alpha=0.3) + geom_smooth(data=subset(data, size >= 1480), method="lm", size=1.5, aes(colour="Second class linear reg"))+
 geom_smooth(data=subset(data, size < 1480), method="lm", size=1.5, aes(colour="First class linear reg"))+ ggtitle("Ping time according to packet size with linear regressions")
 p
 ```
-
+Only looking at numbers, Intercept coefficient is pretty good, despite a high standard error. But it doesn't make any sense in this application, latency can't be approximately 113 ms if a huge majority of times are at 111 ms. This gap is even more pronounced for the packets with high size.
 ```{r}
 # Linear regression of packet size < 1482
 linear_reg <- lm(time ~ size, # regression formula
@@ -313,7 +327,16 @@ summary(linear_reg);
 ```
 Both visually and numerically with p-value and r-squared, this linear regression seems inappropriate.
 
-A quantile regression should be more accurate. The range between the 3rd quartile and the minimum value of time is the same for packets whose size is below 1482, and only one for the others. Then, a 3rd quartile regression should be perfect to approximate latency and capacity.
+A quantile regression should be more accurate. Let's evaluate the most adapted tau.
+
+```{r}
+rqfit <- rq(time ~ size, data = low_size, tau=1:9/10)
+plot(summary(rqfit), parm="size", main="Size coefficient along with confidence intervals for each tau (Low class)")
+
+rqfit <- rq(time ~ size, data = high_size, tau=1:9/10)
+plot(summary(rqfit), parm="size", main="Size coefficient along with confidence intervals for each tau (High class)")
+```
+Unfortunately, a null divison occurs in the computation, it is a conditioning problem. To keep having a quantile regression analysis, we could try different tau, and find the smallest value working correctly. In this case, the smallest one is approximately 0.75 for both classes.
 ```{r}
 #
 summary(low_size[["time"]]);
@@ -328,14 +351,13 @@ p
 Results seem pretty good. The size coefficients in both quantiles regression below don't allow to reject the null hypothesis. It is hard to compute the capacity C because of this uncertainty. The (Intercept) coefficient has an extremely low standard error, and is estimated at 110 ms.
 
 ```{r}
-# Low class 3r quartile regression
-summary(lm(time ~ size, data=low_size[low_size$time < quantile(low_size$time, 0.75),]));
+summary(rq(time ~ size, data = low_size, tau=0.75))
 
-# High class 3rd quartile regression
-summary(lm(time ~ size, data=high_size[high_size$time < quantile(high_size$time, 0.75),]));
+summary(rq(time ~ size, data = high_size, tau=0.75))
 ```
 
 The second dataset shows long distance latencies. In contrary to the first dataset, the latencies are the same for the two classes (~110 ms), because the time involved by the data travel is far superior to the packets fragmentation cost. Moreover, the fact that size doesn't influence at all ping time for the three first quartiles makes the analysis of the capacity not relevant.in this scenario.
+
 
 
 # Conclusion 
